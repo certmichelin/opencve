@@ -4,12 +4,14 @@
 # Run is as root or via sudo
 
 _GREEN="\360\237\237\242"
+_YELLOW="\360\237\237\241"
 _RED="\342\235\214"
 _BYE="\360\237\221\213"
 _DONE="\342\234\205"
 _ROCKET="\360\237\232\200"
 
 display-and-exec() {
+
      _TXT="$1"
      _CMD="$2"
 
@@ -26,10 +28,33 @@ display-and-exec() {
 
 }
 
+is-present() {
+
+    _FILE="$1"
+    if [ -f $_FILE ]; then
+        if ! $_FORCE; then
+            printf "%b %s\n" "$_YELLOW" "$_FILE file is already present, ignoring the step to update it."
+            printf "%s\n" "Use -f option to override with the default file."
+            return 0
+        else
+            printf "%b %s\n" "$_YELLOW" "$_FILE file is already present."
+            printf "> replaced %b\n" "$_DONE"
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
 add-config-files() {
 
     _RELEASE=$1
     _MAJOR_VERSION=${_RELEASE:0:2}
+    _AIRFLOW_CONFIG_FILE="../scheduler/airflow.cfg"
+    _DJANGO_SETTINGS_FILE="../web/opencve/conf/settings.py"
+    _DJANGO_OPENCVE_ENV="../web/opencve/conf/.env"
+    _DOCKER_COMPOSE_ENV="./.env"
+    _NGINX_TEMPLATE="./conf/opencve.conf.template"
 
     printf "\n--------| %s\n" "Find the release to install"
     if [[ $_RELEASE == "latest" ]] ; then
@@ -41,36 +66,53 @@ add-config-files() {
             display-and-exec "checking out $_RELEASE" "git checkout -B $_RELEASE"
         fi
     elif [[ $_MAJOR_VERSION =~ ^[v0-1|0-1.]+$ ]] ; then
-        printf "%s\n" "ERROR: this script works only for release >= 2.0.0, release given: $_RELEASE"
+        printf "%b %s\n" "$_RED" "ERROR: this script works only for release >= 2.0.0, release given: $_RELEASE"
         exit 1
     else
         display-and-exec "checking out $_RELEASE" "git checkout -B $_RELEASE"
     fi
 
     printf "\n--------| %s\n" "Airflow configuration"
-    display-and-exec "copying airflow config file" "cp ../scheduler/airflow.cfg.example ../scheduler/airflow.cfg"
-    _START_DATE=$(date '+%Y-%m-%d')
-    display-and-exec "updating start date for Airflow dag" "sed -i.bak 's/start_date = .*/start_date = $_START_DATE/g' ../scheduler/airflow.cfg && rm -f ../scheduler/airflow.cfg.bak"
-    _CONFIGURED_START_DATE=$(grep 'start_date' ../scheduler/airflow.cfg)
-    printf "%s\n" "Default configuration: $_CONFIGURED_START_DATE"
+    is-present $_AIRFLOW_CONFIG_FILE
+    if [[ ! $? ]] ; then
+        display-and-exec "copying airflow config file" "cp ../scheduler/airflow.cfg.example $_AIRFLOW_CONFIG_FILE"
+        _START_DATE=$(date '+%Y-%m-%d')
+        display-and-exec "updating start date for Airflow dag" "sed -i.bak 's/start_date = .*/start_date = $_START_DATE/g' ../scheduler/airflow.cfg && rm -f ../scheduler/airflow.cfg.bak"
+        _CONFIGURED_START_DATE=$(grep 'start_date' ../scheduler/airflow.cfg)
+        printf "%s\n" "Default configuration: $_CONFIGURED_START_DATE"
+    fi
 
     printf "\n--------| %s\n" "Django settings and .env file"
-    display-and-exec "copying Django settings" "cp ../web/opencve/conf/settings.py.example ../web/opencve/conf/settings.py"
-    display-and-exec "copying Webserver env file" "cp ../web/opencve/conf/.env.example ../web/opencve/conf/.env"
+    is-present $_DJANGO_SETTINGS_FILE
+    if [[ ! $? ]] ; then
+        display-and-exec "copying Django settings" "cp ../web/opencve/conf/settings.py.example $_DJANGO_SETTINGS_FILE"
+    fi
+    is-present $_DJANGO_OPENCVE_ENV
+    if [[ ! $? ]] ; then
+        display-and-exec "copying Webserver env file" "cp ../web/opencve/conf/.env.example $_DJANGO_OPENCVE_ENV"
+    fi
 
     printf "\n--------| %s\n" "Docker compose .env file"
-    display-and-exec "copying Docker compose env file" "cp ./conf/.env.example ./.env"
+    is-present $_DOCKER_COMPOSE_ENV
+    if [[ ! $? ]] ; then
+        display-and-exec "copying Docker compose env file" "cp ./conf/.env.example $_DOCKER_COMPOSE_ENV"
+    fi
+
     display-and-exec "updating OpenCVE release to $_RELEASE" "sed -i.bak 's,OPENCVE_VERSION=.*,OPENCVE_VERSION=$_RELEASE,g' ./.env && rm -f ./.env.bak"
 
     printf "\n--------| %s\n" "Nginx OpenCVE template"
-    display-and-exec "copying OpenCVE configuration" "cp ./conf/opencve.conf.template.example ./conf/opencve.conf.template"
-    display-and-exec "copying empty default configuration" "cp ./conf/default.conf.template.example ./conf/default.conf.template"
+    is-present $_NGINX_TEMPLATE
+    if [[ ! $? ]] ; then
+        display-and-exec "copying OpenCVE configuration" "cp ./conf/opencve.conf.template.example $_NGINX_TEMPLATE"
+        display-and-exec "copying empty default configuration" "cp ./conf/default.conf.template.example ./conf/default.conf.template"
+    fi
 
-    printf "\n\n%b\n" "$_GREEN The default configuration files are all set, you can update them now if you want before starting the entire docker stack:"
-    printf " %-15s %s\n" "Docker compose" ": ./.env"
-    printf " %-15s %s\n" "Webserver" ": ../web/opencve/conf/.env"
-    printf " %-15s %s\n" "Airflow" ": ../scheduler/airflow.cfg"
-    printf " %-15s %s\n" "Django" ": ../web/opencve/conf/settings.py"
+    printf "\n\n%b\n" "$_GREEN The configuration files are all set, you can update them now if you want before starting the entire docker stack:"
+    printf " %-15s %s\n" "Docker compose" ": $_DOCKER_COMPOSE_ENV"
+    printf " %-15s %s\n" "Webserver" ": $_DJANGO_OPENCVE_ENV"
+    printf " %-15s %s\n" "Airflow" ": $_AIRFLOW_CONFIG_FILE"
+    printf " %-15s %s\n" "Django" ": $_DJANGO_OPENCVE_ENV"
+    printf " %-15s %s\n" "Nginx" ": $_NGINX_TEMPLATE"
     printf "\n%s\n" "See the documentation for details: https://docs.opencve.io/deployment/#configuration"
     printf "\n %b\n\n" "$_ROCKET You can now run: ./install.sh start"
 
@@ -202,6 +244,7 @@ install-end() {
 }
 
 display-usage() {
+
     _S1=7
     _S2=9
     _BOLD="\033[1m"
@@ -258,30 +301,34 @@ display-usage() {
 }
 
 _RELEASE="latest"
-OPTSTRING=":r:h"
-
+_FORCE=false
+OPTSTRING=":r:fh"
 while getopts ${OPTSTRING} opt; do
-  case ${opt} in
-    r)
-      _RELEASE="${OPTARG}"
-      ;;
-    h)
-      display-usage
-      exit 1
-      ;;
-    :)
-      echo "Option -${OPTARG} requires an argument."
-      exit 1
-      ;;
-    ?)
-      echo "Invalid argument: -${OPTARG}."
-      exit 1
-      ;;
+    case ${opt} in
+        f)
+            _FORCE=true
+            shift
+            ;;
+        h)
+            display-usage
+            exit 1
+            ;;
+        r)
+            _RELEASE="${OPTARG}"
+            shift 2
+            ;;
+        :)
+            echo "Option -${OPTARG} requires an argument."
+            exit 1
+            ;;
+        ?)
+            echo "Invalid argument: -${OPTARG}."
+            exit 1
+            ;;
   esac
 done
 
 _COMMAND=$1
-
 case $_COMMAND in
     "prepare" )
         add-config-files $_RELEASE
